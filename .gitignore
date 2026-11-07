@@ -1,0 +1,10 @@
+# Archivos temporales de R y RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*_cache/
+*_files/
+# Salidas intermedias
+resultados_ts.json
+visitantes.rda

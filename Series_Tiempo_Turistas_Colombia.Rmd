@@ -1,0 +1,392 @@
+---
+title: "Modelamiento y pronóstico de la llegada mensual de visitantes extranjeros no residentes a Colombia (2015–2025)"
+subtitle: "Inferencia Avanzada y Análisis Multivariado — Unidad 4 · Actividad sumativa"
+date: "Noviembre de 2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: default
+    highlight: tango
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+# Opciones globales: mostrar el código, ocultar mensajes y guardar cada figura en la carpeta figuras/
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center",
+                      fig.path = "figuras/", dev = "png", dpi = 150)
+```
+
+**Fuente de datos.** Datos Abiertos Colombia (datos.gov.co), conjunto *Extranjeros No Residentes* (id `7wm8-w5ad`), publicado por el Ministerio de Comercio, Industria y Turismo con registros de Migración Colombia. El archivo original (466.915 registros por año, mes, ciudad de destino y país de residencia) se agregó a un total nacional mensual en `data/turistas_colombia_mensual.csv`. El código para reconstruir ese CSV desde la fuente está en el Anexo, al final del documento.
+
+**Paquetes necesarios** (instalar una sola vez en RStudio): `install.packages(c("forecast", "tseries", "knitr", "jsonlite"))`
+
+# Carga y preparación de la serie
+
+```{r librerias}
+library(forecast)   # descomposición, suavizamiento exponencial, Holt-Winters, métricas de error
+library(tseries)    # pruebas de estacionariedad ADF y KPSS
+library(knitr)      # tablas
+library(jsonlite)   # exportación de resultados
+
+GRIS <- "grey55"; ROJO <- "#b03a2e"
+MESES <- c("Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic")
+```
+
+```{r carga}
+datos <- read.csv("data/turistas_colombia_mensual.csv")
+datos$fecha <- as.Date(datos$fecha)
+stopifnot(!any(is.na(datos$visitantes)))            # sin valores faltantes
+
+# Objeto ts mensual: inicia en enero de 2015, frecuencia 12
+serie <- ts(datos$visitantes, start = c(2015, 1), frequency = 12)
+cat("Observaciones:", length(serie), "| desde", format(min(datos$fecha), "%Y-%m"),
+    "hasta", format(max(datos$fecha), "%Y-%m"), "\n")
+summary(serie)
+
+# Regímenes: la pandemia (mar-2020 a dic-2021) es un cambio estructural
+pre  <- window(serie, end = c(2019, 12))            # 60 meses prepandemia
+post <- window(serie, start = c(2022, 1))           # pospandemia (ene-2022 a jul-2025)
+miles <- function(x) x / 1000
+```
+
+# Análisis exploratorio
+
+## Serie completa, tendencia y choque de la pandemia
+
+```{r fig1_serie, fig.width=10, fig.height=3.8}
+par(mar = c(3, 4.5, 2.5, 1), cex = 0.85)
+plot(miles(serie), lwd = 1.4, ylab = "Miles de visitantes", xlab = "",
+     main = "Llegada mensual de visitantes extranjeros no residentes a Colombia, 2015–2025")
+rect(2020 + 2/12, -50, 2022, 600, col = adjustcolor(GRIS, 0.25), border = NA)   # pandemia
+lines(miles(ma(serie, order = 12, centre = TRUE)), col = ROJO, lwd = 2, lty = 2)  # tendencia
+legend("topleft", bty = "n", cex = 0.85, lwd = c(1.4, 2, 8), lty = c(1, 2, 1),
+       col = c("black", ROJO, adjustcolor(GRIS, 0.4)),
+       legend = c("Visitantes mensuales", "Media móvil centrada 2x12 (tendencia)", "Pandemia COVID-19"))
+```
+
+```{r anual}
+anual <- aggregate(as.numeric(serie), by = list(Año = floor(time(serie))), FUN = sum)
+names(anual)[2] <- "Total"
+anual$Meses <- as.numeric(table(floor(time(serie))))
+anual$`Crecimiento %` <- round(c(NA, diff(anual$Total) / head(anual$Total, -1) * 100), 1)
+anual_tab <- anual; anual_tab$Año <- as.character(anual_tab$Año)   # el año sin separador de miles
+kable(anual_tab, format.args = list(big.mark = ".", decimal.mark = ","), caption = "Total anual (2025 solo hasta julio)")
+cat("Mínimo:", min(serie), "en", format(datos$fecha[which.min(serie)], "%Y-%m"),
+    "| Máximo:", max(serie), "en", format(datos$fecha[which.max(serie)], "%Y-%m"), "\n")
+```
+
+**Lectura.** Se distinguen tres tramos: (1) **crecimiento sostenido** 2015–2019; (2) **colapso** por el cierre de fronteras en 2020 (mínimo de `r min(serie)` visitantes en abril de 2020) y reapertura gradual en 2021; (3) **recuperación y nuevos récords** desde 2022, con un máximo histórico en diciembre de 2024.
+
+## Estacionalidad
+
+```{r fig2_estacionalidad, fig.width=10, fig.height=3.8}
+mat <- matrix(as.numeric(window(serie, end = c(2024, 12))), nrow = 12)   # años completos 2015-2024
+colnames(mat) <- 2015:2024
+# Índice relativo: valor del mes / media de su año (se excluyen 2020-2021 por el choque)
+normal <- mat[, !(colnames(mat) %in% c("2020", "2021"))]
+relativo <- sweep(normal, 2, colMeans(normal), "/")
+
+par(mfrow = c(1, 2), mar = c(3, 4.5, 2.5, 1), cex = 0.8)
+tonos <- grey(seq(0.75, 0, length.out = ncol(mat)))
+matplot(1:12, miles(mat), type = "o", pch = 16, cex = 0.5, col = tonos,
+        lty = ifelse(colnames(mat) %in% c("2020", "2021"), 3, 1), lwd = 1.3,
+        xaxt = "n", xlab = "", ylab = "Miles", main = "Perfil estacional por año (2020–2021 punteados)")
+axis(1, 1:12, MESES); legend("topleft", legend = colnames(mat), col = tonos, lty = 1, ncol = 2, cex = 0.6, bty = "n")
+boxplot(t(relativo), names = MESES, col = "grey88", medcol = ROJO, ylab = "Índice relativo",
+        main = "Mes / media del año (sin 2020–2021)")
+abline(h = 1, lty = 2, col = GRIS)
+round(rowMeans(relativo), 3) |> setNames(MESES)
+```
+
+**Lectura.** El patrón se repite todos los años: **picos en diciembre, julio y agosto** (vacaciones de fin de año y de verano en el hemisferio norte, de donde llega la mayoría de visitantes) y en marzo (Semana Santa en algunos años), y **valles en mayo, septiembre y abril**.
+
+```{r amplitud}
+# ¿La amplitud estacional crece con el nivel? Criterio para elegir modelo aditivo o multiplicativo
+amp <- data.frame(Año = as.integer(colnames(normal)), Media = colMeans(normal),
+                  Rango = apply(normal, 2, function(x) max(x) - min(x)),
+                  Desv = apply(normal, 2, sd))
+amp$`CV %` <- round(amp$Desv / amp$Media * 100, 1)
+amp_tab <- amp; amp_tab$Año <- as.character(amp_tab$Año)
+kable(amp_tab, digits = 0, row.names = FALSE, format.args = list(big.mark = ".", decimal.mark = ","))
+corr_amp <- cor(amp$Media, amp$Rango)
+cat("Correlación entre nivel medio anual y rango estacional:", round(corr_amp, 3), "\n")
+```
+
+Cuando el nivel se duplica (de unos 165 mil en 2015 a 375 mil en 2024), el **rango estacional también se duplica**, mientras que el coeficiente de variación se mantiene alrededor de 8–10 %. Es decir, las oscilaciones son **proporcionales al nivel**: evidencia a favor del modelo **multiplicativo**.
+
+## Ciclos y ruido
+
+La serie cubre poco más de diez años, insuficiente para identificar ciclos económicos formales (que duran varios años). La oscilación de mayor plazo es el **choque de la pandemia**, que se trata como un cambio estructural y no como un ciclo regular. El ruido se analiza con los residuos de la descomposición (sección 3).
+
+## Estacionariedad
+
+```{r estacionariedad}
+# ADF:  H0 = la serie tiene raíz unitaria (NO es estacionaria)
+# KPSS: H0 = la serie ES estacionaria
+# Nota: tseries reporta los p-valores de KPSS truncados en 0,01 y 0,10.
+prueba <- function(x, nombre) {
+  x <- na.omit(x)
+  p_adf  <- suppressWarnings(adf.test(x)$p.value)
+  p_kpss <- suppressWarnings(kpss.test(x, null = "Level")$p.value)
+  concl <- if (p_adf < 0.05 && p_kpss > 0.05) "Estacionaria" else
+           if (p_adf > 0.05 && p_kpss < 0.05) "No estacionaria" else "No concluyente"
+  data.frame(Serie = nombre, n = length(x), `p ADF` = round(p_adf, 3),
+             `p KPSS` = round(p_kpss, 3), Conclusión = concl, check.names = FALSE)
+}
+lpre <- log(pre)
+estac <- rbind(
+  prueba(pre, "Prepandemia (nivel)"),
+  prueba(lpre, "Prepandemia (log)"),
+  prueba(diff(lpre), "Prepandemia Δ log"),
+  prueba(diff(diff(lpre), lag = 12), "Prepandemia Δ Δ12 log"),
+  prueba(post, "Pospandemia (nivel)"),
+  prueba(diff(diff(log(post)), lag = 12), "Pospandemia Δ Δ12 log"))
+kable(estac)
+cat("Diferencias regulares sugeridas (ndiffs):", ndiffs(lpre),
+    "| diferencias estacionales sugeridas (nsdiffs):", nsdiffs(lpre), "\n")
+```
+
+```{r fig3_estacionariedad, fig.width=10, fig.height=5.5}
+par(mfrow = c(2, 2), mar = c(3, 4, 2.5, 1), cex = 0.75)
+plot(miles(pre), ylab = "Miles", xlab = "", main = "Prepandemia: media móvil creciente → no estacionaria")
+lines(miles(stats::filter(pre, rep(1/12, 12), sides = 1)), col = ROJO, lwd = 2)
+legend("topleft", c("Serie", "Media móvil 12"), col = c("black", ROJO), lwd = c(1, 2), bty = "n", cex = 0.8)
+dd <- diff(diff(lpre), lag = 12)
+plot(dd, ylab = "", xlab = "", main = "Δ Δ12 log(serie): media constante → estacionaria"); abline(h = 0, col = GRIS)
+Acf(pre, lag.max = 36, main = "ACF serie original (prepandemia)")
+Pacf(dd, lag.max = 18, main = "PACF serie diferenciada")
+```
+
+**Conclusión de estacionariedad.** En niveles, la serie **no es estacionaria en media**. KPSS rechaza la estacionariedad en todos los casos en nivel. El ADF de `tseries` incluye una tendencia determinística y por eso rechaza la raíz unitaria en la serie prepandemia: el resultado "no concluyente" indica que la serie es **estacionaria alrededor de una tendencia**, no alrededor de una media fija. A eso se suma la estacionalidad: la ACF decae lentamente y tiene picos en los rezagos 12, 24 y 36. Tras aplicar logaritmo, una diferencia regular y una estacional (Δ Δ12 log), ambas pruebas coinciden en que la serie es **estacionaria**, tanto antes como después de la pandemia.
+
+# Descomposición de la serie
+
+La descomposición clásica exige una serie sin rupturas, por lo que se aplica al **régimen prepandemia (2015–2019, 60 meses)** y, para comprobar la estabilidad del patrón, al **régimen pospandemia (2022–2025)**. Se comparan los dos modelos:
+
+* Aditivo: **Y(t) = T(t) + S(t) + R(t)**, con amplitud estacional constante.
+* Multiplicativo: **Y(t) = T(t) × S(t) × R(t)**, con amplitud proporcional al nivel.
+
+```{r comparacion_descomposicion}
+dec_add <- decompose(pre, type = "additive")
+dec_mul <- decompose(pre, type = "multiplicative")
+r_add <- na.omit(dec_add$random); r_mul <- na.omit(dec_mul$random)
+t_add <- na.omit(dec_add$trend);  t_mul <- na.omit(dec_mul$trend)
+comp <- data.frame(
+  Modelo = c("Aditivo", "Multiplicativo"),
+  `Desv. residuo (% del nivel)` = c(sd(r_add / t_add) * 100, sd(r_mul - 1) * 100),
+  `p Ljung-Box (12 rezagos)` = c(Box.test(r_add, lag = 12, type = "Ljung-Box")$p.value,
+                                Box.test(r_mul, lag = 12, type = "Ljung-Box")$p.value),
+  check.names = FALSE)
+kable(comp, digits = 3)
+```
+
+```{r fig4_descomposicion, fig.width=10, fig.height=7}
+par(mfrow = c(4, 1), mar = c(1.5, 4.5, 1.5, 1), oma = c(1.5, 0, 2, 0), cex = 0.8)
+plot(miles(pre), ylab = "Observada\n(miles)", xlab = "")
+plot(miles(dec_mul$trend), ylab = "Tendencia\n(miles)", xlab = "")
+plot(dec_mul$seasonal, ylab = "Estacional\n(índice)", xlab = ""); abline(h = 1, col = GRIS)
+plot(dec_mul$random, type = "p", pch = 16, cex = 0.6, ylab = "Residuo\n(índice)", xlab = ""); abline(h = 1, col = GRIS)
+mtext("Descomposición clásica multiplicativa — régimen prepandemia (2015–2019)", outer = TRUE, font = 2)
+```
+
+```{r pendientes}
+pend_pre  <- coef(lm(t_mul ~ seq_along(t_mul)))[2]
+dec_post  <- decompose(post, type = "multiplicative")
+t_post    <- na.omit(dec_post$trend)
+pend_post <- coef(lm(t_post ~ seq_along(t_post)))[2]
+cat(sprintf("Tendencia prepandemia: +%s visitantes/mes (≈ %.1f %% anual sobre la media)\n",
+            format(round(pend_pre), big.mark = ".", decimal.mark = ","), pend_pre * 12 / mean(t_mul) * 100))
+cat(sprintf("Tendencia pospandemia: +%s visitantes/mes\n", format(round(pend_post), big.mark = ".", decimal.mark = ",")))
+```
+
+```{r fig5_indices, fig.width=8.5, fig.height=3.3}
+ind <- data.frame(Mes = MESES, Prepandemia = dec_mul$figure, Pospandemia = dec_post$figure)
+corr_ind <- cor(ind$Prepandemia, ind$Pospandemia)
+par(mar = c(3, 4.5, 2.5, 1), cex = 0.8)
+barplot(t(as.matrix(ind[, 2:3])), beside = TRUE, names.arg = MESES, col = c("grey80", "black"),
+        ylim = c(0.8, 1.2), xpd = FALSE, ylab = "Índice estacional",
+        main = "Índices estacionales multiplicativos (1 = mes promedio)")
+abline(h = 1, col = ROJO, lty = 2); box()
+legend("top", c("Prepandemia 2015–2019", "Pospandemia 2022–2025"), fill = c("grey80", "black"), horiz = TRUE, bty = "n", cex = 0.8)
+kable(ind, digits = 3, row.names = FALSE)
+cat("Correlación entre los índices de ambos regímenes:", round(corr_ind, 3), "\n")
+```
+
+```{r fig6_stl, fig.width=10, fig.height=5}
+# STL robusta sobre toda la serie en logaritmos: separa el choque del COVID de la estacionalidad
+fit_stl <- stl(log(serie), s.window = 13, robust = TRUE)
+par(mfrow = c(3, 1), mar = c(1.5, 4.5, 1.5, 1), oma = c(1.5, 0, 2, 0), cex = 0.8)
+plot(miles(exp(fit_stl$time.series[, "trend"])), ylab = "Tendencia\n(miles)", xlab = "")
+plot(exp(fit_stl$time.series[, "seasonal"]), ylab = "Estacional\n(índice)", xlab = "")
+plot(exp(fit_stl$time.series[, "remainder"]), ylab = "Residuo\n(índice, log)", xlab = "", log = "y")
+mtext("Descomposición STL robusta de la serie completa (log), 2015–2025", outer = TRUE, font = 2)
+```
+
+**Interpretación de los componentes.**
+
+* **Tendencia:** prepandemia crecía unos `r format(round(pend_pre), big.mark = ".", decimal.mark = ",")` visitantes por mes. Después de la pandemia el ritmo es mayor (`r format(round(pend_post), big.mark = ".", decimal.mark = ",")` por mes), aunque se desacelera en 2025.
+* **Estacionalidad:** en diciembre y julio llegan 10–14 % más visitantes que en un mes promedio; en mayo y septiembre, cerca de 10 % menos. Los índices de los dos regímenes tienen una correlación de `r round(corr_ind, 3)`, así que el patrón estacional **sobrevivió intacto a la pandemia**.
+* **Residuo:** representa alrededor del 2 % del nivel. En la STL concentra el choque de 2020–2021, lo que confirma que fue un evento atípico y no parte de la estacionalidad.
+
+# Técnicas de pronóstico
+
+**Diseño.** Los modelos de suavizamiento dan más peso a lo reciente y quedarían distorsionados por los valores cercanos a cero de 2020–2021, así que se ajustan en el régimen pospandemia:
+
+* **Entrenamiento:** ene-2022 a ene-2025 (37 meses).
+* **Prueba:** feb-2025 a jul-2025 (6 meses que los modelos no ven).
+* **Validación con origen móvil:** 8 orígenes, de jun-2024 a ene-2025, con horizonte de 1 a 6 meses.
+
+```{r pronostico_prueba}
+H <- 6
+train <- window(post, end = c(2025, 1))
+test  <- window(post, start = c(2025, 2))
+
+ajustar <- function(y, h) {
+  # Devuelve una lista con el pronóstico de cada método para h periodos
+  list(
+    "Ingenuo estacional"          = snaive(y, h = h)$mean,
+    "Media móvil (k=3)"           = rep(mean(tail(y, 3)), h),
+    "Media móvil (k=12)"          = rep(mean(tail(y, 12)), h),
+    "SES (simple)"                = ses(y, h = h)$mean,
+    "Holt (doble)"                = holt(y, h = h)$mean,
+    "Holt-Winters aditivo"        = hw(y, h = h, seasonal = "additive")$mean,
+    "Holt-Winters multiplicativo" = hw(y, h = h, seasonal = "multiplicative")$mean)
+}
+metr <- function(real, pred) {
+  e <- as.numeric(real) - as.numeric(pred)
+  c(MAE = mean(abs(e)), RMSE = sqrt(mean(e^2)), `MAPE %` = mean(abs(e / as.numeric(real))) * 100)
+}
+pron <- ajustar(train, H)
+res <- t(sapply(pron, metr, real = test))
+
+# Parámetros de suavizamiento estimados (alfa = nivel, beta = tendencia, gamma = estacionalidad)
+params <- list(
+  "SES (simple)" = ses(train, h = H)$model$par["alpha"],
+  "Holt (doble)" = holt(train, h = H)$model$par[c("alpha", "beta")],
+  "Holt-Winters aditivo" = hw(train, h = H, seasonal = "additive")$model$par[c("alpha", "beta", "gamma")],
+  "Holt-Winters multiplicativo" = hw(train, h = H, seasonal = "multiplicative")$model$par[c("alpha", "beta", "gamma")])
+params <- lapply(params, round, 3)
+print(params)
+```
+
+```{r validacion_origen_movil}
+origenes <- seq(2024 + 5/12, 2025 + 0/12, by = 1/12)       # jun-2024 ... ene-2025
+errores <- setNames(vector("list", length(pron)), names(pron))
+for (o in origenes) {
+  y_tr <- window(post, end = o)
+  y_te <- window(post, start = o + 1/12)
+  h <- min(H, length(y_te)); y_te <- y_te[1:h]
+  f <- ajustar(y_tr, h)
+  for (k in names(f)) errores[[k]] <- c(errores[[k]], abs((y_te - as.numeric(f[[k]])) / y_te) * 100)
+}
+cv <- sapply(errores, mean)
+tabla <- data.frame(Método = rownames(res), round(res, 1), `MAPE % origen móvil` = round(cv[rownames(res)], 1),
+                    check.names = FALSE)
+tabla <- tabla[order(tabla$`MAPE % origen móvil`), ]
+kable(tabla, row.names = FALSE, format.args = list(big.mark = ".", decimal.mark = ","))
+MEJOR <- tabla$Método[1]
+cat("Errores evaluados por método en origen móvil:", length(errores[[1]]), "| Mejor:", MEJOR, "\n")
+```
+
+```{r fig7_comparacion, fig.width=10, fig.height=4}
+par(mar = c(3, 4.5, 2.5, 1), cex = 0.8)
+real <- window(post, start = c(2023, 7))
+rango_y <- range(miles(real), sapply(pron, function(p) range(miles(p)))) * c(0.97, 1.03)   # eje que incluye todos los pronósticos
+plot(miles(real), type = "o", pch = 16, cex = 0.6, lwd = 1.6, ylim = rango_y, las = 1,
+     ylab = "Miles de visitantes", xlab = "", main = "Comparación de métodos en el periodo de prueba (feb–jul 2025)")
+abline(v = 2025 + 1/12 - 0.04, col = GRIS)
+est <- list("Media móvil (k=12)" = c(3, GRIS), "SES (simple)" = c(4, GRIS), "Holt (doble)" = c(2, GRIS),
+            "Ingenuo estacional" = c(1, "grey40"), "Holt-Winters multiplicativo" = c(1, ROJO))
+for (k in names(est)) lines(miles(pron[[k]]), lty = as.numeric(est[[k]][1]), col = est[[k]][2], lwd = 1.8)
+legend("bottomleft", ncol = 2, bty = "n", cex = 0.75,
+       legend = c("Real", sprintf("%s (MAPE %.1f %%)", names(est), res[names(est), "MAPE %"])),
+       lty = c(1, sapply(est, function(e) as.numeric(e[1]))), col = c("black", sapply(est, `[`, 2)), lwd = 1.8)
+```
+
+```{r diagnostico_residuos}
+mod_hw <- hw(train, h = H, seasonal = "multiplicative")
+lb <- Box.test(residuals(mod_hw), lag = 12, type = "Ljung-Box", fitdf = 3)
+cat("Ljung-Box (12 rezagos) sobre residuos de Holt-Winters multiplicativo: p =", round(lb$p.value, 3), "\n")
+# p cercano a 0,05: queda algo de autocorrelación residual, una limitación del modelo (ver informe)
+```
+
+**Comparación.** En el corte único de 6 meses gana el **ingenuo estacional** porque 2025 casi repitió el patrón de 2024: el crecimiento interanual se moderó a entre 2 % y 9 %. En la validación con origen móvil, que promedia 48 errores en lugar de 6, **Holt-Winters multiplicativo** es el más preciso. SES, Holt y las medias móviles quedan atrás porque no modelan la estacionalidad, el componente dominante de la serie.
+
+# Pronóstico final a 12 meses (ago-2025 a jul-2026)
+
+```{r pronostico_final}
+fit_final <- hw(post, h = 12, seasonal = "multiplicative", level = c(80, 95))
+fc <- data.frame(Mes = format(seq(as.Date("2025-08-01"), by = "month", length.out = 12), "%Y-%m"),
+                 Pronóstico = round(as.numeric(fit_final$mean)),
+                 `IC 95 % inf.` = round(as.numeric(fit_final$lower[, 2])),
+                 `IC 95 % sup.` = round(as.numeric(fit_final$upper[, 2])), check.names = FALSE)
+kable(fc, format.args = list(big.mark = ".", decimal.mark = ","))
+cat("Total pronosticado ago-2025 a jul-2026:", format(round(sum(fc$Pronóstico)), big.mark = ".", decimal.mark = ","), "\n")
+cat("Total observado  ago-2024 a jul-2025:", format(sum(window(post, start = c(2024, 8))), big.mark = ".", decimal.mark = ","), "\n")
+```
+
+```{r fig8_pronostico, fig.width=10, fig.height=3.8}
+par(mar = c(3, 4.5, 2.5, 1), cex = 0.8)
+plot(fit_final, main = "Pronóstico Holt-Winters multiplicativo a 12 meses con intervalos de 80 % y 95 %",
+     ylab = "Miles de visitantes", xlab = "", fcol = ROJO, shadecols = c("grey85", "grey70"), flwd = 2, yaxt = "n")
+marcas <- pretty(c(0, max(fit_final$upper)))
+axis(2, at = marcas, labels = marcas / 1000, las = 1)          # eje en miles, sin notación científica
+```
+
+## Contraste con cifras oficiales publicadas después del corte de los datos
+
+El MinCIT publicó acumulados posteriores a julio de 2025: 3.137.210 visitantes extranjeros entre enero y agosto (Portafolio, 2025) y 3.467.026 entre enero y septiembre (El Universal, 2025). Restando el acumulado de enero a julio de la serie se obtienen los valores de agosto y septiembre.
+
+```{r contraste_expost}
+acum_jul <- sum(window(serie, start = c(2025, 1)))
+real_ago <- 3137210 - acum_jul; real_sep <- 3467026 - 3137210
+expost <- data.frame(Mes = c("2025-08", "2025-09"), Real = c(real_ago, real_sep),
+                     `Holt-Winters` = fc$Pronóstico[1:2],
+                     `Ingenuo estacional` = as.numeric(window(post, start = c(2024, 8), end = c(2024, 9))),
+                     check.names = FALSE)
+expost$`Error HW %` <- round((expost$`Holt-Winters` / expost$Real - 1) * 100, 1)
+expost$`Error ingenuo %` <- round((expost$`Ingenuo estacional` / expost$Real - 1) * 100, 1)
+expost$`¿Real dentro del IC 95 %?` <- expost$Real >= fc$`IC 95 % inf.`[1:2] & expost$Real <= fc$`IC 95 % sup.`[1:2]
+kable(expost, format.args = list(big.mark = ".", decimal.mark = ","))
+```
+
+## Análisis complementario: ¿se recuperó la trayectoria prepandemia?
+
+```{r contrafactual}
+hw_pre <- hw(pre, h = length(serie) - length(pre), seasonal = "multiplicative")
+brecha <- (window(serie, start = c(2022, 1)) / window(hw_pre$mean, start = c(2022, 1)) - 1) * 100
+brecha_anual <- tapply(brecha, floor(time(brecha)), mean)
+round(brecha_anual, 1)
+```
+
+Un Holt-Winters ajustado solo con 2015–2019 representa la trayectoria que el turismo traía antes de la pandemia. Desde 2023 los valores observados la **superan** en `r round(brecha_anual["2023"], 0)` % a `r round(brecha_anual["2024"], 0)` %: el sector no solo se recuperó, sino que creció por encima de su tendencia previa.
+
+# Exportación de resultados
+
+```{r exportar}
+resultados <- list(
+  n = length(serie), anual = anual, amp = amp, corr_amp = corr_amp, estac = estac, comp = comp,
+  pend_pre = unname(pend_pre), pend_pre_pct = unname(pend_pre * 12 / mean(t_mul) * 100), pend_post = unname(pend_post),
+  indices = ind, corr_ind = corr_ind, tabla = tabla, params = params, mejor = MEJOR, lb_p = lb$p.value,
+  fc = fc, fc_total = sum(fc$Pronóstico), obs_total_prev = sum(window(post, start = c(2024, 8))),
+  expost = expost, brecha = as.list(round(brecha_anual, 1)),
+  min = min(serie), max = max(serie))
+write_json(resultados, "resultados_ts.json", auto_unbox = TRUE, digits = 6, pretty = TRUE)
+```
+
+# Anexo: reconstrucción del CSV desde la fuente original {-}
+
+```{r anexo, eval=FALSE}
+# Descarga el archivo original (copia del paquete ColombiAPI, datos de datos.gov.co id 7wm8-w5ad)
+url <- "https://raw.githubusercontent.com/lightbluetitan/colombiapi/main/data/foreign_visitors_tbl_df.rda"
+download.file(url, "visitantes.rda", mode = "wb")
+load("visitantes.rda")                                   # crea el objeto foreign_visitors_tbl_df
+crudo <- as.data.frame(foreign_visitors_tbl_df)
+mes_num <- match(crudo$Mes, c("Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"))
+crudo$fecha <- as.Date(sprintf("%d-%02d-01", as.integer(crudo$Año), mes_num))
+agregado <- aggregate(crudo[["Cant Extranjeros no Residentes"]], by = list(fecha = crudo$fecha), FUN = sum)
+names(agregado)[2] <- "visitantes"
+write.csv(agregado[order(agregado$fecha), ], "data/turistas_colombia_mensual.csv", row.names = FALSE)
+```
