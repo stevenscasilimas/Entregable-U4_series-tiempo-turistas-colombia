@@ -2,9 +2,11 @@
 
 Análisis y pronóstico de la serie mensual de **visitantes extranjeros no residentes que llegan a Colombia (enero 2015 – julio 2025)**, desarrollado en **R / RStudio**.
 
-> Actividad sumativa · Unidad 4 · Módulo *Inferencia Avanzada y Análisis Multivariado* · Noviembre de 2026
+> Actividad sumativa · Unidad 4 · Módulo *Inferencia Avanzada y Análisis Multivariado* · Politécnico Grancolombiano · Noviembre de 2026
+>
+> **Integrantes:** Ana Milena Uribe, Alejandro Quintero, Francisco Mario Campo, Pablo Stevens Casilimas · **Docente:** Jaime Edison Rojas Mora
 
-📄 **[Informe técnico (PDF)](informe/Informe_Series_Tiempo_Turistas.pdf)** · 📊 **[Reporte completo con código y gráficas (HTML)](docs/index.html)** · 💻 **[Código fuente (R Markdown)](Series_Tiempo_Turistas_Colombia.Rmd)**
+📄 **[Informe técnico en formato APA (PDF)](informe/Informe_Series_Tiempo_Turistas.pdf)** · ✏️ **[Texto editable del informe](informe/informe.md)** · 📊 **[Reporte completo con código y gráficas (HTML)](docs/index.html)** · 💻 **[Código fuente (R Markdown)](Series_Tiempo_Turistas_Colombia.Rmd)**
 
 ![Serie mensual de visitantes extranjeros](figuras/fig1_serie-1.png)
 
@@ -19,7 +21,7 @@ Identificar los componentes de la serie (tendencia, estacionalidad, ciclos y rui
 | **Fuente** | [Datos Abiertos Colombia – *Extranjeros No Residentes*](https://www.datos.gov.co/Comercio-Industria-y-Turismo/Extranjeros-No-Residentes/7wm8-w5ad) (MinCIT con registros de Migración Colombia) |
 | **Registros originales** | 466.915 (año, mes, ciudad de destino, país de residencia) |
 | **Serie analizada** | 127 observaciones mensuales del total nacional (`data/turistas_colombia_mensual.csv`) |
-| **Periodo** | Enero 2015 – julio 2025 |
+| **Periodo** | Enero 2015 – julio 2025 (la versión del conjunto utilizada llega hasta julio de 2025; por eso el pronóstico de ago-2025 a jul-2026 es retrospectivo y se contrasta con cifras oficiales posteriores) |
 
 El código para reconstruir el CSV desde la fuente original está en el anexo del archivo `.Rmd`.
 
@@ -53,9 +55,11 @@ El código para reconstruir el CSV desde la fuente original está en el anexo de
 ├── data/
 │   └── turistas_colombia_mensual.csv     # Serie mensual agregada
 ├── docs/
-│   └── index.html                        # Reporte generado con Knit
+│   └── index.html                        # Reporte generado con Knit (copia del HTML)
 ├── figuras/                              # Gráficas generadas por el análisis
 └── informe/
+    ├── informe.md                        # Texto editable del informe (formato APA)
+    ├── generar_pdf_apa.py                # Convierte informe.md en el PDF con formato APA 7
     └── Informe_Series_Tiempo_Turistas.pdf
 ```
 
@@ -67,7 +71,20 @@ El código para reconstruir el CSV desde la fuente original está en el anexo de
    ```r
    install.packages(c("forecast", "tseries", "knitr", "jsonlite", "rmarkdown"))
    ```
-4. Abrir `Series_Tiempo_Turistas_Colombia.Rmd` y presionar **Knit**.
+4. Abrir `Series_Tiempo_Turistas_Colombia.Rmd` y presionar **Knit**. Se regeneran las figuras de `figuras/` y se crea `Series_Tiempo_Turistas_Colombia.html`; para actualizar el reporte publicado, cópielo a `docs/index.html`.
+
+## Cómo editar el informe y regenerar el PDF
+
+El informe está en `informe/informe.md` y se puede editar directamente en GitHub (ícono del lápiz). Sus figuras se leen de `figuras/`, así que se actualizan solas al volver a hacer Knit. Las cifras del texto y de las tablas están escritas a mano: si cambia el análisis, hay que actualizarlas.
+
+Para generar el PDF con formato APA 7 (portada, Times New Roman 12, doble espacio, tablas y figuras APA) se necesita Python:
+
+```bash
+pip install reportlab markdown-it-py pillow
+python informe/generar_pdf_apa.py
+```
+
+Los datos de la portada (título, integrantes, institución, curso, docente y fecha) están en el bloque inicial de `informe.md`, entre las líneas `---`.
 
 Probado con R 4.3 y el paquete `forecast`.
 
@@ -76,4 +93,5 @@ Probado con R 4.3 y el paquete `forecast`.
 - Gujarati, D. N. (2004). *Basic econometrics* (4.ª ed.). McGraw-Hill.
 - Hyndman, R. J., y Athanasopoulos, G. (2021). *Forecasting: Principles and practice* (3.ª ed.). OTexts.
 - Montgomery, D. C., Jennings, C. L., y Kulahci, M. (2015). *Introduction to time series analysis and forecasting* (2.ª ed.). Wiley.
+- Rojas Mora, J. E. (s. f.). *Series de tiempo* [Lectura fundamental, Unidad 4]. Politécnico Grancolombiano.
 - Wooldridge, J. M. (2013). *Introductory econometrics: A modern approach* (5.ª ed.). Cengage.

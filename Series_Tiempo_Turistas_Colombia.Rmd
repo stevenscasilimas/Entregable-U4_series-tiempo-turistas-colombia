@@ -20,7 +20,9 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align =
 
 **Fuente de datos.** Datos Abiertos Colombia (datos.gov.co), conjunto *Extranjeros No Residentes* (id `7wm8-w5ad`), publicado por el Ministerio de Comercio, Industria y Turismo con registros de Migración Colombia. El archivo original (466.915 registros por año, mes, ciudad de destino y país de residencia) se agregó a un total nacional mensual en `data/turistas_colombia_mensual.csv`. El código para reconstruir ese CSV desde la fuente está en el Anexo, al final del documento.
 
-**Paquetes necesarios** (instalar una sola vez en RStudio): `install.packages(c("forecast", "tseries", "knitr", "jsonlite"))`
+**Corte de los datos.** La versión del conjunto utilizada llega hasta julio de 2025. Por eso el pronóstico de agosto de 2025 a julio de 2026 es un **ejercicio retrospectivo**: se estima con la información disponible hasta julio de 2025, como se habría hecho en ese momento, y después se contrasta con las cifras oficiales publicadas para agosto y septiembre de 2025.
+
+**Paquetes necesarios** (instalar una sola vez en RStudio): `install.packages(c("forecast", "tseries", "knitr", "jsonlite", "rmarkdown"))`. Tras presionar **Knit**, copiar el HTML generado a `docs/index.html` para actualizar el reporte publicado.
 
 # Carga y preparación de la serie
 
@@ -183,7 +185,7 @@ kable(comp, digits = 3)
 ```
 
 ```{r fig4_descomposicion, fig.width=10, fig.height=7}
-par(mfrow = c(4, 1), mar = c(1.5, 4.5, 1.5, 1), oma = c(1.5, 0, 2, 0), cex = 0.8)
+par(mfrow = c(4, 1), mar = c(1.5, 5.5, 1.5, 1), oma = c(1.5, 0, 2, 0), cex = 0.8)   # margen izquierdo amplio para las etiquetas
 plot(miles(pre), ylab = "Observada\n(miles)", xlab = "")
 plot(miles(dec_mul$trend), ylab = "Tendencia\n(miles)", xlab = "")
 plot(dec_mul$seasonal, ylab = "Estacional\n(índice)", xlab = ""); abline(h = 1, col = GRIS)
@@ -217,7 +219,7 @@ cat("Correlación entre los índices de ambos regímenes:", round(corr_ind, 3), 
 ```{r fig6_stl, fig.width=10, fig.height=5}
 # STL robusta sobre toda la serie en logaritmos: separa el choque del COVID de la estacionalidad
 fit_stl <- stl(log(serie), s.window = 13, robust = TRUE)
-par(mfrow = c(3, 1), mar = c(1.5, 4.5, 1.5, 1), oma = c(1.5, 0, 2, 0), cex = 0.8)
+par(mfrow = c(3, 1), mar = c(1.5, 5.5, 1.5, 1), oma = c(1.5, 0, 2, 0), cex = 0.8)   # margen izquierdo amplio para las etiquetas
 plot(miles(exp(fit_stl$time.series[, "trend"])), ylab = "Tendencia\n(miles)", xlab = "")
 plot(exp(fit_stl$time.series[, "seasonal"]), ylab = "Estacional\n(índice)", xlab = "")
 plot(exp(fit_stl$time.series[, "remainder"]), ylab = "Residuo\n(índice, log)", xlab = "", log = "y")
@@ -293,9 +295,11 @@ cat("Errores evaluados por método en origen móvil:", length(errores[[1]]), "| 
 ```{r fig7_comparacion, fig.width=10, fig.height=4}
 par(mar = c(3, 4.5, 2.5, 1), cex = 0.8)
 real <- window(post, start = c(2023, 7))
-rango_y <- range(miles(real), sapply(pron, function(p) range(miles(p)))) * c(0.97, 1.03)   # eje que incluye todos los pronósticos
-plot(miles(real), type = "o", pch = 16, cex = 0.6, lwd = 1.6, ylim = rango_y, las = 1,
+rango_y <- range(miles(real), sapply(pron, function(p) range(miles(p)))) * c(0.88, 1.03)   # eje que incluye todos los pronósticos y deja espacio a la leyenda
+plot(miles(real), type = "o", pch = 16, cex = 0.6, lwd = 1.6, ylim = rango_y, las = 1, xaxt = "n",
      ylab = "Miles de visitantes", xlab = "", main = "Comparación de métodos en el periodo de prueba (feb–jul 2025)")
+axis(1, at = seq(2023.5, 2025.5, by = 0.5),                          # eje en meses, no en años decimales
+     labels = c("jul-2023", "ene-2024", "jul-2024", "ene-2025", "jul-2025"))
 abline(v = 2025 + 1/12 - 0.04, col = GRIS)
 est <- list("Media móvil (k=12)" = c(3, GRIS), "SES (simple)" = c(4, GRIS), "Holt (doble)" = c(2, GRIS),
             "Ingenuo estacional" = c(1, "grey40"), "Holt-Winters multiplicativo" = c(1, ROJO))
